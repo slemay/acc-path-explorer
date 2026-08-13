@@ -1,69 +1,326 @@
-import Image from "next/image";
+'use client';
+
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  UserResponses,
+  StudentContext,
+  ACCProgram,
+  ActionPlanTask,
+  AssessmentResult
+} from '@/types';
+import {
+  loadUserResponses,
+  saveUserResponses,
+  eraseAllLocalData,
+  loadSelectedPaths,
+  saveSelectedPaths,
+  loadActionPlan,
+  saveActionPlan,
+  DEFAULT_USER_RESPONSES,
+  DEFAULT_STUDENT_CONTEXT
+} from '@/lib/storage';
+import { calculateAssessmentResults } from '@/lib/scoringEngine';
+import { generateFirstSemesterSchedules } from '@/lib/plannerEngine';
+import { ACC_PROGRAMS, getProgramById } from '@/data/accPrograms';
+
+import { Header } from '@/components/Layout/Header';
+import { Footer } from '@/components/Layout/Footer';
+import { TabNav, ActiveTab } from '@/components/Layout/TabNav';
+
+import { WelcomeView } from '@/components/Assessment/WelcomeView';
+import { AssessmentWizard } from '@/components/Assessment/AssessmentWizard';
+import { StudentContextModal } from '@/components/Assessment/StudentContextModal';
+import { ResultsOverview } from '@/components/Results/ResultsOverview';
+import { PathExplorer } from '@/components/Explorer/PathExplorer';
+import { PathDetailModal } from '@/components/Detail/PathDetailModal';
+import { ComparePathsModal } from '@/components/Compare/ComparePathsModal';
+import { FirstSemesterPlanner } from '@/components/Planner/FirstSemesterPlanner';
+import { ExplorationPlanView } from '@/components/ActionPlan/ExplorationPlanView';
+import { ExportReportModal } from '@/components/Report/ExportReportModal';
+import { DataGovernanceView } from '@/components/Governance/DataGovernanceView';
 
 export default function Home() {
+  const [mounted, setMounted] = useState(false);
+  const [activeTab, setActiveTab] = useState<ActiveTab>('assessment');
+  const [responses, setResponses] = useState<UserResponses>(DEFAULT_USER_RESPONSES);
+  const [selectedPathIds, setSelectedPathIds] = useState<string[]>([]);
+  const [actionPlanTasks, setActionPlanTasks] = useState<ActionPlanTask[]>([]);
+
+  const [activeDetailProgram, setActiveDetailProgram] = useState<ACCProgram | null>(null);
+  const [leadingPlannerProgram, setLeadingPlannerProgram] = useState<ACCProgram | undefined>(undefined);
+
+  const [isContextModalOpen, setIsContextModalOpen] = useState(false);
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [isStarted, setIsStarted] = useState(false);
+
+  // Load from local storage on mount
+  useEffect(() => {
+    const loadedResponses = loadUserResponses();
+    const loadedPaths = loadSelectedPaths();
+    const loadedTasks = loadActionPlan();
+
+    setResponses(loadedResponses);
+    setSelectedPathIds(loadedPaths);
+    setActionPlanTasks(loadedTasks);
+
+    // If assessment already has answers, mark as started
+    const hasAnswers = Object.keys(loadedResponses.moduleA).length > 0;
+    setIsStarted(hasAnswers);
+
+    // Default leading program to first computer science or top match
+    setLeadingPlannerProgram(ACC_PROGRAMS[0]);
+
+    setMounted(true);
+  }, []);
+
+  // Compute assessment results deterministically whenever responses change
+  const results: AssessmentResult = useMemo(() => {
+    return calculateAssessmentResults(responses);
+  }, [responses]);
+
+  // Map program ID -> fit score
+  const fitScoresMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const match of results.domainMatches) {
+      for (const prog of match.topPrograms) {
+        map[prog.id] = match.fitScore;
+      }
+    }
+    return map;
+  }, [results]);
+
+  // Persist responses on changes
+  const handleUpdateResponses = (updated: UserResponses) => {
+    setResponses(updated);
+    saveUserResponses(updated);
+    setIsStarted(true);
+  };
+
+  // Persist student profile
+  const handleSaveContext = (updatedContext: StudentContext) => {
+    const updated = {
+      ...responses,
+      studentContext: updatedContext
+    };
+    handleUpdateResponses(updated);
+  };
+
+  // Add/Remove Path from Compare
+  const handleToggleCompare = (programId: string) => {
+    let updated: string[];
+    if (selectedPathIds.includes(programId)) {
+      updated = selectedPathIds.filter(id => id !== programId);
+    } else {
+      if (selectedPathIds.length >= 3) {
+        alert('You can compare up to 3 paths at a time. Remove one to add another.');
+        return;
+      }
+      updated = [...selectedPathIds, programId];
+    }
+    setSelectedPathIds(updated);
+    saveSelectedPaths(updated);
+  };
+
+  const handleClearCompare = () => {
+    setSelectedPathIds([]);
+    saveSelectedPaths([]);
+  };
+
+  // Update Action Plan
+  const handleUpdateTasks = (tasks: ActionPlanTask[]) => {
+    setActionPlanTasks(tasks);
+    saveActionPlan(tasks);
+  };
+
+  // Reset/Erase all local data
+  const handleResetData = () => {
+    if (confirm('Are you sure you want to erase all locally saved assessment answers and custom action plans from this browser? This action cannot be undone.')) {
+      eraseAllLocalData();
+      setResponses(DEFAULT_USER_RESPONSES);
+      setSelectedPathIds([]);
+      setActionPlanTasks([]);
+      setIsStarted(false);
+      setActiveTab('explorer');
+    }
+  };
+
+  // Plan First Semester around a specific program
+  const handlePlanWithProgram = (prog: ACCProgram) => {
+    setLeadingPlannerProgram(prog);
+    setActiveTab('planner');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleStartAssessment = (mode: 'quick' | 'deep') => {
+    const updated: UserResponses = {
+      ...responses,
+      assessmentMode: mode
+    };
+    handleUpdateResponses(updated);
+    setIsStarted(true);
+    setActiveTab('assessment');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // First semester discussion schedule
+  const discussionSchedule = useMemo(() => {
+    const { exploratorySchedule } = generateFirstSemesterSchedules(
+      responses.studentContext,
+      leadingPlannerProgram
+    );
+    return exploratorySchedule;
+  }, [responses.studentContext, leadingPlannerProgram]);
+
+  const selectedProgramsObjects = useMemo(() => {
+    return selectedPathIds
+      .map(id => getProgramById(id))
+      .filter((p): p is ACCProgram => p !== undefined);
+  }, [selectedPathIds]);
+
+  if (!mounted) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-500">
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+          <span>Loading ACC Path Explorer...</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
+    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans antialiased">
+      {/* Universal Header */}
+      <Header
+        onOpenContext={() => setIsContextModalOpen(true)}
+        onOpenExport={() => setIsExportModalOpen(true)}
+        onResetData={handleResetData}
+        onOpenGovernance={() => setActiveTab('governance')}
+        completionPercentage={results.completionPercentage}
+      />
+
+      {/* Main Tab Navigation */}
+      <TabNav
+        activeTab={activeTab}
+        onSelectTab={setActiveTab}
+        hasCompletedAssessment={results.totalQuestionsAnswered >= 15}
+        selectedPathsCount={selectedPathIds.length}
+      />
+
+      {/* Dynamic Content Views */}
+      <main className="flex-1 w-full pb-12">
+        {/* TAB 1: EXPLORER */}
+        {activeTab === 'explorer' && (
+          <PathExplorer
+            onSelectProgram={prog => setActiveDetailProgram(prog)}
+            onAddToCompare={handleToggleCompare}
+            isProgramInCompare={id => selectedPathIds.includes(id)}
+            onPlanWithProgram={handlePlanWithProgram}
+            fitScoresMap={fitScoresMap}
+          />
+        )}
+
+        {/* TAB 2: ASSESSMENT */}
+        {activeTab === 'assessment' && (
+          !isStarted && results.totalQuestionsAnswered === 0 ? (
+            <WelcomeView
+              studentContext={responses.studentContext}
+              onStartAssessment={handleStartAssessment}
+              onBrowsePrograms={() => setActiveTab('explorer')}
+              onOpenContextModal={() => setIsContextModalOpen(true)}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+          ) : (
+            <AssessmentWizard
+              responses={responses}
+              onUpdateResponses={handleUpdateResponses}
+              onViewResults={() => {
+                setActiveTab('results');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+            />
+          )
+        )}
+
+        {/* TAB 3: RESULTS */}
+        {activeTab === 'results' && (
+          <ResultsOverview
+            results={results}
+            onSelectProgram={prog => setActiveDetailProgram(prog)}
+            onAddToCompare={handleToggleCompare}
+            isProgramInCompare={id => selectedPathIds.includes(id)}
+            onPlanWithProgram={handlePlanWithProgram}
+            onRetakeAssessment={() => setActiveTab('assessment')}
+            onNavigateTab={setActiveTab}
+          />
+        )}
+
+        {/* TAB 4: COMPARE */}
+        {activeTab === 'compare' && (
+          <ComparePathsModal
+            selectedPathIds={selectedPathIds}
+            onRemovePath={handleToggleCompare}
+            onClearAll={handleClearCompare}
+            onOpenExplorer={() => setActiveTab('explorer')}
+            onPlanWithProgram={handlePlanWithProgram}
+            fitScoresMap={fitScoresMap}
+          />
+        )}
+
+        {/* TAB 5: PLANNER */}
+        {activeTab === 'planner' && (
+          <FirstSemesterPlanner
+            studentContext={responses.studentContext}
+            leadingProgram={leadingPlannerProgram}
+            onSelectLeadingProgram={setLeadingPlannerProgram}
+            onOpenExport={() => setIsExportModalOpen(true)}
+          />
+        )}
+
+        {/* TAB 6: ACTION PLAN */}
+        {activeTab === 'actionPlan' && (
+          <ExplorationPlanView
+            tasks={actionPlanTasks}
+            onUpdateTasks={handleUpdateTasks}
+            selectedPrograms={selectedProgramsObjects}
+            onOpenExport={() => setIsExportModalOpen(true)}
+          />
+        )}
+
+        {/* TAB 7: GOVERNANCE */}
+        {activeTab === 'governance' && (
+          <DataGovernanceView />
+        )}
       </main>
+
+      {/* Universal Footer */}
+      <Footer onOpenGovernance={() => setActiveTab('governance')} />
+
+      {/* Modals */}
+      <StudentContextModal
+        isOpen={isContextModalOpen}
+        onClose={() => setIsContextModalOpen(false)}
+        context={responses.studentContext}
+        onSaveContext={handleSaveContext}
+      />
+
+      <PathDetailModal
+        program={activeDetailProgram}
+        isOpen={activeDetailProgram !== null}
+        onClose={() => setActiveDetailProgram(null)}
+        onAddToCompare={handleToggleCompare}
+        isInCompare={activeDetailProgram ? selectedPathIds.includes(activeDetailProgram.id) : false}
+        onPlan={handlePlanWithProgram}
+      />
+
+      <ExportReportModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        responses={responses}
+        results={results}
+        selectedPrograms={selectedProgramsObjects}
+        tasks={actionPlanTasks}
+        discussionSchedule={discussionSchedule}
+      />
     </div>
   );
 }

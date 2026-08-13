@@ -1,5 +1,5 @@
-import React from 'react';
-import { Compass, Trash2, Printer, ShieldCheck, UserCheck, Sparkles } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Compass, Trash2, Printer, ShieldCheck, UserCheck, Sparkles, Sun, Moon } from 'lucide-react';
 import { Badge } from '@/components/UI/Badge';
 
 interface HeaderProps {
@@ -17,6 +17,34 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenGovernance,
   completionPercentage
 }) => {
+  const [isDarkMode, setIsDarkMode] = useState(false);
+
+  useEffect(() => {
+    // Check initial preference from localStorage or system
+    const savedTheme = localStorage.getItem('acc_theme_mode');
+    const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const shouldBeDark = savedTheme === 'dark' || (!savedTheme && systemPrefersDark);
+
+    setIsDarkMode(shouldBeDark);
+    if (shouldBeDark) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, []);
+
+  const toggleTheme = () => {
+    const nextDark = !isDarkMode;
+    setIsDarkMode(nextDark);
+    if (nextDark) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('acc_theme_mode', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('acc_theme_mode', 'light');
+    }
+  };
+
   return (
     <header className="sticky top-0 z-40 w-full bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 transition-colors">
       {/* Top Advisory Banner */}
@@ -57,6 +85,26 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Action Bar */}
           <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+            {/* Dark / Light Mode Switch */}
+            <button
+              onClick={toggleTheme}
+              aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors border border-slate-300 dark:border-slate-700 cursor-pointer"
+              title={isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            >
+              {isDarkMode ? (
+                <>
+                  <Sun className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="hidden sm:inline">Light</span>
+                </>
+              ) : (
+                <>
+                  <Moon className="w-3.5 h-3.5 text-indigo-600" />
+                  <span className="hidden sm:inline">Dark</span>
+                </>
+              )}
+            </button>
+
             {/* Student Context Profile Button */}
             <button
               onClick={onOpenContext}
